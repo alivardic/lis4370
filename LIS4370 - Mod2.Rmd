@@ -1,0 +1,17 @@
+---
+title: "LIS4370 - Mod2"
+author: "Alina Hagen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r, "Moduale 2"}
+assignment2 <- c(16, 18, 14, 22, 27, 17, 19, 17, 17, 22, 20, 22)
+myMean <- function(assignment2) { 
+  return(sum(assignment2)/length(assignment2)) 
+  }
+
+myMean(assignment2)
+mean(assignment2)
+```
+This function is working as intended. How it works is that the custom function myMean() takes the vector, assignment2, as an argument. Technically, the argument did not need to be named assignment2, it could have been named x, vector, potato, so long as the function moving forward used that same name. Then, the function takes the sum of the vector (adding up each value) and divides it by the length of the vector (how many elements are in the vector). Double checking our custom function against the base r function mean(), we can see that both of these functions are returning the same value. 
