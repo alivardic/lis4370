@@ -1,0 +1,9 @@
+Package: openEvalR
+Title: Parsing and Extracting Tools for Open AI Evaluation JSON files
+Version: 0.0.9000
+Authors@R: Alina Hagen <alinahagen@usf.edu>
+Description: Simplifies parsing and analyzing OpenAI evals .jsonl files in R
+Depends: R (>= 4.4.2)
+Imports: jsonlite, readr, tidyverse 
+License: CC0
+LazyData: true
