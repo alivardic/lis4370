@@ -1,0 +1,178 @@
+---
+title: "openEvalR"
+author: "Alina Hagen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+``` {r}
+# Necessary Libraries
+library(jsonlite)
+library(tidyverse)
+library(irr)
+library(caret)
+
+```
+
+# Results Converter:
+This function will read a JSONL file containing model-generated outputs, extract relevant fields, and reshape the data so that outputs from multiple models for each unique item are displayed side by side in a standard dataframe. 
+
+Necessary inputs: the OpenAI .jsonl Evaluation file path, the full name of the ground-truth column
+Expected output: A dataframe consisiting of the data_source_idx, the ground-truth column, and any model-result pairing for each model in the test.
+
+```{r}
+results <- function(jsonl_path, groundtruth_col) {
+  # Load JSONL file
+  json_data <- stream_in(file(jsonl_path), flatten = TRUE)
+
+  # Extract relevant fields and flatten model outputs
+  json <- json_data %>%
+    mutate(model_output = map_chr(sample.outputs, ~ .x[[2]])) %>%
+    select(data_source_idx, !!sym(groundtruth_col), sample.sampled_model_name, model_output)
+
+  # Assign model index to each sample
+  json_prepped <- json %>%
+    group_by(data_source_idx) %>%
+    arrange(sample.sampled_model_name, .by_group = TRUE) %>%
+    mutate(model_index = row_number()) %>%
+    ungroup()
+
+  # Pivot to wide format
+  json_wide <- json_prepped %>%
+    pivot_wider(
+      id_cols = c(data_source_idx, !!sym(groundtruth_col)),
+      names_from = model_index,
+      values_from = c(sample.sampled_model_name, model_output),
+      names_glue = "model_{model_index}_{.value}"
+    )
+
+  # Reorder model columns: name then output per model
+  all_cols <- names(json_wide)
+  meta_cols <- all_cols[1:2]  # assumes data_source_idx + groundtruth
+  model_cols <- setdiff(all_cols, meta_cols)
+
+  # Extract numeric order while preserving order
+  model_indices <- unique(str_extract(model_cols, "(?<=model_)\\d+"))
+
+  # Interleave model name + output per index
+  reordered_model_cols <- unlist(lapply(model_indices, function(i) {
+    grep(paste0("^model_", i, "_(sample\\.sampled_model_name|model_output)$"), model_cols, value = TRUE)
+  }))
+
+  # Recombine and return
+  json_wide <- json_wide %>% select(all_of(c(meta_cols, reordered_model_cols)))
+  return(json_wide)
+}
+```
+
+# results() Example
+```{r}
+df <- results("Luigi_Raw.jsonl", "item.Luigi_stance")
+head(df)
+
+```
+
+# Metadata Extractor
+This function extracts item.* fields and data_source_idx from an OpenAI evaluation export, allowing users to reconnect model results to their original dataset using the unique identifier extracted using the results() function.
+
+Necessary inputs: the OpenAI .jsonl Evaluation file path
+Expected output: A dataframe consisiting of the data_source_idx and the original dataset uploaded to OpenAI
+
+```{r}
+
+metadata <- function(jsonl_path) {
+  # Load the JSONL file
+  json_data <- stream_in(file(jsonl_path), flatten = TRUE)
+
+  # Grab all item.* columns
+  item_cols <- grep("^item\\.", names(json_data), value = TRUE)
+
+  # Add data_source_idx explicitly
+  result <- json_data %>%
+    select(data_source_idx, all_of(item_cols)) %>%
+    arrange(data_source_idx)
+
+  return(result)
+}
+
+```
+
+# metadata() Example
+``` {r}
+df2 <- metadata("Luigi_Raw.jsonl")
+head(df)
+
+```
+
+# Kappa Calculator 
+This function calculates Cohen’s Kappa between a specified ground truth column and each model's output column in a dataframe. It helps evaluate how closely each model agrees with the human-labeled data, providing a standardized metric of inter-annotator reliability.
+
+Necessary inputs: the dataframe created by the results() function, the full name of the ground-truth column
+Expected output: a dataframe consisting of the Cohen's kappa between each model run and the ground truth
+
+``` {r}
+kappas <- function(df, groundtruth_col) {
+  # Get all model output columns (assumes naming convention used by `converter()`)
+  model_output_cols <- grep("model_\\d+_model_output", names(df), value = TRUE)
+  
+  # Calculate Cohen’s Kappa for each model
+  results <- map_dfr(model_output_cols, function(model_col) {
+    data <- df %>%
+      select(!!sym(groundtruth_col), !!sym(model_col)) %>%
+      drop_na()
+
+    # Ensure both columns are factors for proper kappa handling
+    data <- data %>% mutate_all(as.factor)
+
+    kappa_score <- kappa2(data)$value
+
+    tibble(
+      model_output = model_col,
+      groundtruth = groundtruth_col,
+      kappa = kappa_score
+    )
+  })
+
+  return(results)
+}
+
+```
+
+# kappas() Example
+``` {r}
+df3 <- kappas(df, "item.Luigi_stance")
+head(df3)
+
+```
+
+# Confusion Matrix
+This function computes a confusion matrix between a specified ground truth column and each model's output column in a dataframe.
+
+Necessary inputs: the dataframe created by the results() function, the full name of the ground-truth column
+Expected output: a named list of caret::confusionMatrix objects for performance comparison.
+```{r}
+cmatrix <- function(df, groundtruth_col) {
+  # Find all model output columns
+  model_output_cols <- grep("model_\\d+_model_output", names(df), value = TRUE)
+  
+  # Create confusion matrix for each model
+  confusion_list <- map(model_output_cols, function(model_col) {
+    data <- df %>%
+      select(!!sym(groundtruth_col), !!sym(model_col)) %>%
+      drop_na() %>%
+      mutate(across(everything(), as.factor))  # Ensure factors
+
+    cm <- confusionMatrix(data[[model_col]], data[[groundtruth_col]])
+    return(cm)
+  })
+
+  names(confusion_list) <- model_output_cols
+  return(confusion_list)
+}
+
+```
+
+# cmatrix() Example
+```{r}
+df4 <- cmatrix(df, "item.Luigi_stance")
+print(df4)
+```
